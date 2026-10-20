@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <script>
+    const originalConsoleError = console.error;
+    console.error = function(...args) {
+        originalConsoleError.apply(console, args);
+        const errDiv = document.createElement('div');
+        errDiv.style = 'position:fixed; top:50px; left:0; background:orange; color:black; z-index:999999; padding:20px; font-size:16px; width:100%; border-bottom: 2px solid black; max-height: 50vh; overflow: auto;';
+        errDiv.innerHTML = 'Console Error: ' + args.map(a => (a && a.stack) ? a.stack : (typeof a === 'object' ? JSON.stringify(a) : a)).join(' ');
+        document.body.appendChild(errDiv);
+    };
+    </script>
+    <script>
+    window.onerror = function(msg, url, line, col, error) {
+        const errDiv = document.createElement('div');
+        errDiv.style = 'position:fixed; top:0; left:0; background:red; color:white; z-index:999999; padding:20px; font-size:20px; width:100%;';
+        errDiv.innerHTML = 'Error: ' + msg + '<br>Line: ' + line + '<br>Col: ' + col + '<br>Stack: ' + (error ? error.stack : '');
+        document.body.appendChild(errDiv);
+    };
+    </script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 리치 마작 (Riichi Mahjong 3D)</title>
+    <link rel="stylesheet" href="css/style.css?v=57">
+</head>
+<body>
+    <!-- 3D Three.js Container -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Overlay Layer -->
+    <div id="ui-overlay">
+        <!-- Top Navigation / Round Info -->
+        <header class="top-bar">
+            <div class="game-title">
+                🀄3D 리치 마작
+                <span class="badge">KML 표준 룰북</span>
+            </div>
+
+            <div class="round-info-box">
+                <div class="round-name" id="round-name-text">동 1국 0본장</div>
+                <div class="round-meta">
+                    <div>남은 패 <strong id="wall-remain-text">70</strong></div>
+                    <div>공탁: <strong id="riichi-sticks-text">0</strong> (0점)</div>
+                </div>
+                <div class="dora-display">
+                    <span>도라(현재):</span>
+                    <div class="dora-tiles-container" id="dora-container"></div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="view-btn yaku-dict-btn" id="btn-open-yaku-dict" title="역 목록 및 족보 사전 열기">📖 역 사전</button>
+                <span class="mode-info-tag" id="current-mode-tag" style="cursor: pointer;" title="클릭하여 제한 시간 모드 전환 (무제한 ↔ 5초+30초)">⏱️ 반장전 · 무제한</span>
+                <button class="view-btn" id="btn-toggle-sound">🔊 소리 켜짐</button>
+                <button class="view-btn" id="btn-toggle-camera">📷 [1] 탑뷰 (Space)</button>
+            </div>
+        </header>
+
+        <!-- Player 4-way Status Badges -->
+        <div class="player-tag p0" id="tag-player-0">
+            <span class="wind-badge" id="wind-p0">동</span>
+            <span class="p-name">플레이어 (나)</span>
+            <span class="p-points" id="points-p0">25,000</span>
+        </div>
+
+        <div class="player-tag p1" id="tag-player-1">
+            <span class="wind-badge" id="wind-p1">남</span>
+            <span class="p-name">AI 하가</span>
+            <span class="p-points" id="points-p1">25,000</span>
+        </div>
+
+        <div class="player-tag p2" id="tag-player-2">
+            <span class="wind-badge" id="wind-p2">서</span>
+            <span class="p-name">AI 대면</span>
+            <span class="p-points" id="points-p2">25,000</span>
+        </div>
+
+        <div class="player-tag p3" id="tag-player-3">
+            <span class="wind-badge" id="wind-p3">북</span>
+            <span class="p-name">AI 상가</span>
+            <span class="p-points" id="points-p3">25,000</span>
+        </div>
+
+        <!-- Action Bar (Player Turn & Reaction) -->
+        <div class="action-bar-container">
+            <button class="action-btn btn-tsumo" id="btn-tsumo">쯔모 화료</button>
+            <button class="action-btn btn-riichi" id="btn-riichi">리치 선언</button>
+            <button class="action-btn btn-kyuushu" id="btn-kyuushu" style="display: none; background: linear-gradient(135deg, #ab47bc, #7b1fa2);">구종구패</button>
+            <button class="action-btn btn-ron" id="btn-ron">론 화료</button>
+            <button class="action-btn btn-pon" id="btn-pon">퐁</button>
+            <button class="action-btn btn-chi" id="btn-chi">치</button>
+            <button class="action-btn btn-kan" id="btn-kan">깡</button>
+            <button class="action-btn btn-pass" id="btn-pass">패스</button>
+            <button class="action-btn btn-cancel-action" id="btn-cancel-action" style="display: none; background-color: #6c757d;">취소</button>
+        </div>
+
+        <!-- Turn Timer HUD (5s Base + 30s Bank) -->
+        <div id="turn-timer-hud" class="turn-timer-hud" style="display: none;">
+            <div class="timer-main-row">
+                <span class="timer-phase-badge" id="timer-phase-badge">기본</span>
+                <span class="timer-seconds" id="timer-base-text">5</span><span class="timer-unit">초</span>
+                <span class="timer-plus" id="timer-plus-sign">+</span>
+                <span class="timer-bank" id="timer-bank-text">30</span><span class="timer-unit">초</span>
+            </div>
+            <div class="timer-bar-track">
+                <div class="timer-bar-fill" id="timer-bar-fill"></div>
+            </div>
+        </div>
+
+        <!-- Hover Waits HUD -->
+        <div class="riichi-waits-hud" id="hover-waits-hud" style="display: none; top: 30%; bottom: auto; left: 50%; transform: translateX(-50%);">
+            <div class="riichi-waits-header">
+                <span class="riichi-icon">🀄</span>
+                <span class="riichi-title">대기패 (예상)</span>
+            </div>
+            <div class="riichi-waits-list" id="hover-waits-list" style="flex-wrap: wrap;">
+            </div>
+        </div>
+        <!-- Riichi Waits HUD -->
+        <div class="riichi-waits-hud" id="riichi-waits-hud" style="display: none;">
+            <div class="riichi-waits-header">
+                <span class="riichi-icon">🀄</span>
+                <span class="riichi-title">리치 대기패</span>
+            </div>
+            <div class="riichi-waits-list" id="riichi-waits-list">
+                <!-- Injected via JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Win Modal (Detailed Yaku List & Score) -->
+    <div class="modal-overlay" id="modal-win">
+        <div class="modal-content">
+            <div class="modal-header" id="win-modal-title">화료!</div>
+            <div class="modal-sub" id="win-modal-sub">플레이어 화료 (AI 방총)</div>
+
+            <!-- Winning Hand Preview -->
+            <div class="win-hand-preview" id="win-tiles-preview"></div>
+            
+            <!-- Dora Indicators Preview -->
+            <div class="win-dora-preview" id="win-dora-preview"></div>
+
+            <!-- Yaku List -->
+            <div class="yaku-container" id="win-yaku-list">
+                <!-- Injected via JS -->
+            </div>
+
+            <!-- Total Score & Payment -->
+            <div class="score-summary-box">
+                <div class="score-title-badge" id="win-score-title">30부 4판 (만관)</div>
+                <div class="score-main" id="win-total-score">8,000 점</div>
+                <div class="score-payment-desc" id="win-payment-desc">방총자가 8,000점 지불</div>
+            </div>
+
+            <button class="modal-btn" id="btn-next-round">다음 국 진행 ➡️</button>
+        </div>
+    </div>
+
+    <!-- Draw Modal -->
+    <div class="modal-overlay" id="modal-draw">
+        <div class="modal-content">
+            <div class="modal-header" id="draw-modal-title">황패 유국 (荒牌流局)</div>
+            <div class="modal-sub" id="draw-modal-sub">패산이 모두 소진되어 국이 종료되었습니다.</div>
+
+            <div class="yaku-container" id="draw-tenpai-list">
+                <!-- Injected via JS -->
+            </div>
+
+            <button class="modal-btn" id="btn-draw-next">다음 국 진행 ➡️</button>
+        </div>
+    </div>
+
+    <!-- Game Over Modal -->
+    <div class="modal-overlay" id="modal-gameover">
+        <div class="modal-content">
+            <div class="modal-header">게임 종료</div>
+            <div class="modal-sub" id="gameover-reason">동풍전 종료 (최종 결과)</div>
+
+            <div class="yaku-container" id="gameover-rankings">
+                <!-- Injected via JS -->
+            </div>
+
+            <button class="modal-btn" id="btn-restart-game">새 게임 시작 🔄</button>
+        </div>
+    </div>
+
+    <!-- Stage 5 Deal-in & Rewind Modal (방총 체험 및 시간 되돌리기) -->
+    <div class="modal-overlay" id="modal-tut-deal-in" style="display: none;">
+        <div class="modal-content" style="border: 2px solid #ef4444; box-shadow: 0 0 60px rgba(239, 68, 68, 0.45); max-width: 620px;">
+            <div class="modal-header" style="color: #ef4444; font-size: 1.85rem; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                <span>💥</span> 으악! 방총(쏘임) 당했습니다!
+            </div>
+            <div class="modal-sub" style="color: #fca5a5; font-size: 1.05rem; font-weight: bold; margin-bottom: 16px;">
+                상가 AI의 2-5만 양면 대기에 걸려 '론!'을 쏘였습니다!
+            </div>
+            
+            <div class="tut-analysis-box" style="text-align: left; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.35); color: #fee2e2; margin-bottom: 24px; font-size: 0.95rem; line-height: 1.65; padding: 16px;">
+                <div style="font-weight: 800; color: #f87171; font-size: 1.05rem; margin-bottom: 8px;">⚠️ 마작 초보자가 가장 많이 겪는 비극:</div>
+                • 내 패가 텐파이라고 <strong>"배째고 리치 지르자!"</strong> 했다가, 상대의 2-5만 양면 대기패를 그대로 쏘여 <strong>만관(8,000점)</strong>을 실점했습니다.<br>
+                • <strong>작탁 위에 엎어진 상가 AI의 패를 보세요!</strong> 3-4만을 쥐고 2만과 5만을 기다리고 있었습니다.<br>
+                • <strong>상대의 리치에 리치로 맞대응하는 것</strong>은 내 패가 고정(쯔모기리)되어 무방비 상태에 놓이는 <strong>극도로 위험한 하이리스크 전술</strong>입니다.<br>
+                • 내 손패에 역이나 타점이 얼마 없는데도 <strong>'나도 텐파이다'라며 무작정 리치를 거는 행동은 높은 확률로 큰 실점(방총)</strong>으로 이어져 <strong>손해일 확률이 매우 높습니다!</strong><br>
+                • 상대가 이미 리치를 걸었다면 무작정 공격하는 것보다, 한 수 내어주며(패를 돌리면서: <strong>마와시우치</strong>) 상대의 버림패에 나온 <strong>'현물(現物: 100% 안전패)'</strong>을 버려 버티는 것도 마작에서 가장 중요한 생존 기술입니다.<br><br>
+                <div style="color: #60a5fa; font-weight: 800; font-size: 1rem;">⏳ 시간을 리치 직전으로 되돌려드립니다!</div>
+                이번에는 상가의 버림패에 있는 100% 안전패 <strong>[ 3통 (3p) ]</strong>을 내어 안전하게 위기를 넘겨보세요!
+            </div>
+
+            <button class="modal-btn btn-highlight" id="btn-tut-rewind" style="background: linear-gradient(135deg, #2563eb, #1d4ed8); font-size: 1.15rem; padding: 14px 28px; border-radius: 12px; box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4); cursor: pointer; width: 100%;">
+                ⏳ 시간을 되돌려 안전하게 수비하기 ⏪
+            </button>
+        </div>
+    </div>
+
+    <!-- Mode Selection Modal (Game Start & Restart) -->
+    <div class="modal-overlay" id="modal-mode-select" style="display: flex;">
+        <div class="modal-content mode-select-content">
+            <!-- 1. Main Mode View: 동풍전 / 반장전 / 튜토리얼 -->
+            <div id="view-mode-main">
+                <div class="modal-header">🀄 대국 모드 선택</div>
+                <div class="modal-sub">플레이하실 경기 방식이나 입문 튜토리얼을 선택해 주세요.</div>
+
+                <!-- Timer Option Selector: 무제한 vs 5초 + 30초 누적 장고 -->
+                <div class="timer-setting-bar">
+                    <span class="timer-setting-title">⏱️ 제한 시간 설정:</span>
+                    <label class="timer-radio-pill active" id="pill-timer-unlimited">
+                        <input type="radio" name="main-timer-mode" value="unlimited" checked>
+                        <span>♾️ 무제한 모드 (시간제한 없음)</span>
+                    </label>
+                    <label class="timer-radio-pill" id="pill-timer-standard">
+                        <input type="radio" name="main-timer-mode" value="standard">
+                        <span>⚡ 5초 + 30초 장고 (실전 타이머)</span>
+                    </label>
+                </div>
+
+                <div class="mode-cards-container">
+                    <!-- Option 1: Tonpuusen (동풍전) -->
+                    <div class="mode-card" id="card-mode-tonpuu">
+                        <div>
+                            <div class="mode-card-badge">스피디 단기전 · 약 15분</div>
+                            <div class="mode-card-title">동풍전 (東風戦)</div>
+                            <div class="mode-card-desc">
+                                동 1국부터 동 4국(오라스)까지만 진행되는 빠르고 박진감 넘치는 단기전 모드입니다.
+                            </div>
+                            <div class="mode-rules-list">
+                                <div>• <strong>진행</strong>: 동 1국 ~ 동 4국 (동 4국 종료 시 대국 마감)</div>
+                                <div>• <strong>특징</strong>: 빠른 승부 호흡, 초반 실점 만회가 어려워 속공이 핵심</div>
+                                <div>• <strong>장풍패</strong>: 대국 내내 '동(東)'만 장풍패로 적용</div>
+                            </div>
+                        </div>
+                        <button class="modal-btn mode-select-btn" id="btn-select-tonpuu">동풍전 시작 ⚡</button>
+                    </div>
+
+                    <!-- Option 2: Hanchan (반장전) -->
+                    <div class="mode-card mode-card-recommended" id="card-mode-hanchan">
+                        <div>
+                            <div class="mode-card-badge badge-rec">정통 공식 표준 · 약 30분</div>
+                            <div class="mode-card-title">반장전 (半荘戦) <span class="mode-rec-tag">표준 추천</span></div>
+                            <div class="mode-card-desc">
+                                동국(동 1~4국)과 남국(남 1~4국)을 모두 치르는 마작의 공식 표준 토너먼트 룰입니다.
+                            </div>
+                            <div class="mode-rules-list">
+                                <div>• <strong>진행</strong>: 동 1국 ~ 동 4국 ➡️ <strong>남 1국 ~ 남 4국(오라스)</strong></div>
+                                <div>• <strong>특징</strong>: 충분한 국 수로 역전 기회가 많으며 수비와 타점 설계의 묘미</div>
+                                <div>• <strong>장풍패</strong>: 남국 진입 시 <strong>'남(南)'</strong>으로 자동 전환</div>
+                            </div>
+                        </div>
+                        <button class="modal-btn mode-select-btn btn-highlight" id="btn-select-hanchan">반장전 시작 🏆</button>
+                    </div>
+
+                    <!-- Option 3: Tutorial (튜토리얼 입문 코스) -->
+                    <div class="mode-card mode-card-tutorial" id="card-mode-tutorial">
+                        <div>
+                            <div class="mode-card-badge badge-tut">초보자 입문 · 단계별 실습</div>
+                            <div class="mode-card-title">튜토리얼 (入門) <span class="mode-new-tag">단계별 코스</span></div>
+                            <div class="mode-card-desc">
+                                마작이 처음이신가요? 기본 패 구성부터 화료, 리치, 울기, 역 없음 방지까지 단계별로 배워보세요.
+                            </div>
+                            <div class="mode-rules-list">
+                                <div>• <strong>1~5장 단계별 구성</strong>: 기본형부터 후리텐 및 수비까지</div>
+                                <div>• <strong>맞춤 시나리오</strong>: 고정 손패로 진행되는 친절한 인터랙티브 가이드</div>
+                                <div>• <strong>핵심 팁 전수</strong>: 초보자가 가장 많이 하는 실수 완벽 예방</div>
+                            </div>
+                        </div>
+                        <button class="modal-btn mode-select-btn btn-tutorial" id="btn-select-tutorial">튜토리얼 단계 선택 📖</button>
+                    </div>
+
+                    <!-- Option 4: Online Multiplayer (P2P 실시간 멀티플레이어) -->
+                    <div class="mode-card mode-card-online" id="card-mode-online">
+                        <div>
+                            <div class="mode-card-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border-color: rgba(16, 185, 129, 0.4);">실시간 대전 · 방 코드 입장</div>
+                            <div class="mode-card-title">🌐 온라인 대전 <span class="mode-new-tag" style="background: #10b981;">NEW</span></div>
+                            <div class="mode-card-desc">
+                                4자리 방 코드로 친구를 초대해 함께 즐기세요! 빈자리는 AI가 자동으로 채워집니다.
+                            </div>
+                            <div class="mode-rules-list">
+                                <div>• <strong>매칭</strong>: 4자리 랜덤 숫자 코드로 간편 입장</div>
+                                <div>• <strong>자율 인원</strong>: 2~4인 플레이 가능 (빈자리 AI 자동 참가)</div>
+                                <div>• <strong>룰</strong>: 방장 선택(무제한 or 5초+30초 타이머) 및 전원 준비 시스템</div>
+                            </div>
+                        </div>
+                        <button class="modal-btn mode-select-btn" id="btn-select-online" style="background: linear-gradient(135deg, #059669, #10b981); color: #fff;">온라인 로비 입장 🌐</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2. Tutorial Stages View (단계 선택 화면) -->
+            <div id="view-tutorial-stages" style="display: none;">
+                <div class="tutorial-header-bar">
+                    <button class="tutorial-back-btn" id="btn-tutorial-back">← 대국 모드 선택으로 돌아가기</button>
+                    <div class="modal-header" style="margin-top: 6px;">🀄 리치 마작 입문 튜토리얼</div>
+                    <div class="modal-sub">배우고 싶은 단계를 선택하여 실습을 시작해보세요.</div>
+                </div>
+
+                <div class="tutorial-stage-grid">
+                    <!-- Stage 1 -->
+                    <div class="tutorial-stage-card">
+                        <div class="stage-card-header">
+                            <span class="stage-number-badge">제 1 장</span>
+                            <span class="stage-diff-badge">★☆☆☆☆ 손패 구조 & 공격</span>
+                        </div>
+                        <div class="stage-card-title">기본 손패 구조와 리치(立直) 화료</div>
+                        <div class="stage-card-desc">
+                            테이블에 놓인 배패를 보며 <strong>몸통 3개(슌츠/코츠)</strong>, <strong>완성되려는 몸통(타츠)</strong>, <strong>머리(또이츠)</strong>를 차례대로 살펴보고, <strong>리치</strong> 선언과 <strong>론(ロン) 화료</strong>까지 마작 승리의 기본형(4몸통 1머리 = 14장)을 완벽하게 마스터합니다.
+                        </div>
+                        <div class="stage-card-topics">
+                            <span class="topic-pill">몸통(슌츠/코츠)</span>
+                            <span class="topic-pill">타츠(텐파이)</span>
+                            <span class="topic-pill">머리(또이츠)</span>
+                            <span class="topic-pill">리치 선언</span>
+                            <span class="topic-pill">론 화료</span>
+                        </div>
+                        <button class="tutorial-stage-btn" data-stage="1">1장 시작 🚀</button>
+                    </div>
+
+                    <!-- Stage 2 -->
+                    <div class="tutorial-stage-card">
+                        <div class="stage-card-header">
+                            <span class="stage-number-badge">제 2 장</span>
+                            <span class="stage-diff-badge">★★☆☆☆ 기초 조패</span>
+                        </div>
+                        <div class="stage-card-title">리치를 향한 조패 - 4몸통 1머리 만들기</div>
+                        <div class="stage-card-desc">
+                            일반적인 첫 배패에서 출발하여 외톨이 자패와 불필요한 패를 순서대로 정리하고, <strong>4몸통 1머리 (3+3+3+3+2 = 14장)</strong>를 만들어 직접 <strong>쯔모 화료</strong>까지 완성해 봅니다. (도중 울기 찬스는 멘젠을 위해 [패스]하며, 울기는 3장에서 배웁니다)
+                        </div>
+                        <div class="stage-card-topics">
+                            <span class="topic-pill">4몸통 1머리</span>
+                            <span class="topic-pill">외톨이 자패 정리</span>
+                            <span class="topic-pill">슌츠 완성 & 텐파이</span>
+                            <span class="topic-pill">쯔모 화료</span>
+                        </div>
+                        <button class="tutorial-stage-btn" data-stage="2">2장 시작 🚀</button>
+                    </div>
+
+                    <!-- Stage 3 -->
+                    <div class="tutorial-stage-card">
+                        <div class="stage-card-header">
+                            <span class="stage-number-badge">제 3 장</span>
+                            <span class="stage-diff-badge">★★☆☆☆ 스피드 속공</span>
+                        </div>
+                        <div class="stage-card-title">울기(후로)와 역패 & 쿠이카에 방지</div>
+                        <div class="stage-card-desc">
+                            상대의 버림패로 <strong>중(中) 퐁</strong>을 선언해 1판 역을 확정하고, 필수 공식 룰인 <strong>쿠이카에 금지</strong>를 배우며, 번개 같은 <strong>론(ロン) 화료</strong>까지 속공의 묘미를 완성합니다.
+                        </div>
+                        <div class="stage-card-topics">
+                            <span class="topic-pill">역패 퐁(삼원패)</span>
+                            <span class="topic-pill">쿠이카에 금지</span>
+                            <span class="topic-pill">후로 텐파이</span>
+                            <span class="topic-pill">속공 론 화료</span>
+                        </div>
+                        <button class="tutorial-stage-btn" data-stage="3">3장 시작 🚀</button>
+                    </div>
+
+                    <!-- Stage 4 -->
+                    <div class="tutorial-stage-card">
+                        <div class="stage-card-header">
+                            <span class="stage-number-badge stage-alert">제 4 장 ⚠️</span>
+                            <span class="stage-diff-badge diff-warn">★★★☆☆ 필수 주의</span>
+                        </div>
+                        <div class="stage-card-title">초보자 최대 함정 - "역 없음" 탈출</div>
+                        <div class="stage-card-desc">
+                            이미 후로(치)를 하여 멘젠이 깨진 상태에서 1·9패로 인해 발생하는 <strong>'역 없음(No Yaku)' 텐파이 함정</strong>을 직접 체감하고, 1·9패를 버리는 <strong>우회 조패</strong>를 통해 <strong>탕야오(斷幺九)</strong>로 화료하는 테크닉을 마스터합니다.
+                        </div>
+                        <div class="stage-card-topics">
+                            <span class="topic-pill topic-warn">역 없음 체감</span>
+                            <span class="topic-pill">후로 후 조패</span>
+                            <span class="topic-pill">탕야오 우회 화료</span>
+                        </div>
+                        <button class="tutorial-stage-btn" data-stage="4">4장 시작 🚀</button>
+                    </div>
+
+                    <!-- Stage 5 -->
+                    <div class="tutorial-stage-card">
+                        <div class="stage-card-header">
+                            <span class="stage-number-badge">제 5 장</span>
+                            <span class="stage-diff-badge">★★★☆☆ 실전 수비</span>
+                        </div>
+                        <div class="stage-card-title">수비의 첫걸음 - 후리텐과 안전패</div>
+                        <div class="stage-card-desc">
+                            내가 한 번이라도 버렸던 패로는 론을 할 수 없는 <strong>후리텐(振聴)</strong> 방지법과, 상대가 리치를 걸었을 때 방총(쏘임)을 100% 피하는 <strong>현물(안전패) 타패</strong>를 실습합니다.
+                        </div>
+                        <div class="stage-card-topics">
+                            <span class="topic-pill">후리텐 판정</span>
+                            <span class="topic-pill">상대 버림패 읽기</span>
+                            <span class="topic-pill">현물 안전패</span>
+                        </div>
+                        <button class="tutorial-stage-btn" data-stage="5">5장 시작 🚀</button>
+                    </div>
+
+                    <!-- Stage 6 -->
+                    <div class="tutorial-stage-card">
+                        <div class="stage-card-header">
+                            <span class="stage-number-badge">제 6 장 🎓</span>
+                            <span class="stage-diff-badge" style="background: rgba(34, 197, 94, 0.2); color: #86efac; border-color: rgba(34, 197, 94, 0.4);">★★★★☆ 실전 모의</span>
+                        </div>
+                        <div class="stage-card-title">실전 모의 대국 (플레이어 화료 특별 룰)</div>
+                        <div class="stage-card-desc">
+                            실전과 동일한 환경에서 AI들과 진검승부를 펼쳐봅니다! 단, 초보자 연습을 위한 <strong>특별 룰(오직 플레이어만 화료 가능)</strong>이 적용되어 AI에게 방총당할 걱정 없이 마음껏 조패하고 리치나 화료를 완성해볼 수 있습니다.
+                        </div>
+                        <div class="stage-card-topics">
+                            <span class="topic-pill">실전 환경</span>
+                            <span class="topic-pill">자유 조패</span>
+                            <span class="topic-pill">플레이어 전용 화료</span>
+                            <span class="topic-pill">튜토리얼 졸업</span>
+                        </div>
+                        <button class="tutorial-stage-btn" data-stage="6">6장 시작 🎓</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. Online Multiplayer Lobby View -->
+            <div id="view-online-lobby" style="display: none;">
+                <div class="tutorial-header-bar">
+                    <button class="tutorial-back-btn" id="btn-online-back">← 대국 모드 선택으로 돌아가기</button>
+                    <div class="modal-header" style="margin-top: 6px;">🌐 온라인 멀티플레이어 대전</div>
+                    <div class="modal-sub">방을 만들거나 4자리 방 코드를 입력하여 친구와 함께 대전하세요.</div>
+                </div>
+
+                <!-- A. Entry Box (Before joining/creating) -->
+                <div id="online-entry-box" class="online-box">
+                    <div class="online-input-group">
+                        <label for="input-player-nickname" style="font-weight: bold; color: #ffd54f;">내 닉네임:</label>
+                        <input type="text" id="input-player-nickname" maxlength="10" placeholder="닉네임 입력" value="작사" class="online-text-input">
+                    </div>
+
+                    <div class="online-action-columns">
+                        <!-- Create Room -->
+                        <div class="online-card">
+                            <div class="online-card-title">🏠 방 만들기 (방장)</div>
+                            <div class="online-card-desc">4자리 랜덤 숫자로 방이 생성되며, 빈자리는 AI가 채워집니다.</div>
+                            <button class="modal-btn btn-highlight" id="btn-create-room" style="width: 100%; margin-top: 10px;">새 방 만들기 🎲</button>
+                        </div>
+
+                        <!-- Join Room -->
+                        <div class="online-card">
+                            <div class="online-card-title">🚪 방 참가하기</div>
+                            <div class="online-card-desc">방장에게 전달받은 숫자 4자리 코드를 입력하세요.</div>
+                            <div style="display: flex; gap: 8px; margin-top: 10px;">
+                                <input type="text" id="input-room-code" maxlength="4" placeholder="4자리 숫자" class="room-code-input" autocomplete="off">
+                                <button class="modal-btn mode-select-btn" id="btn-join-room" style="white-space: nowrap; margin-top: 0; padding: 10px 18px;">입장 ➡️</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="online-status-msg" class="online-status-text"></div>
+                </div>
+
+                <!-- B. Room Box (After joined/created) -->
+                <div id="online-room-box" class="online-box" style="display: none;">
+                    <div class="room-code-banner">
+                        <span>방 번호(코드):</span>
+                        <span class="room-code-highlight" id="lobby-room-code-display">----</span>
+                        <button class="view-btn" id="btn-copy-room-code" title="방 코드 복사">📋 코드 복사</button>
+                    </div>
+
+                    <!-- Real-time Lobby Notice Banner -->
+                    <div id="lobby-notification-banner" class="lobby-notice-banner" style="display: none;"></div>
+
+                    <!-- 4 Slots Grid -->
+                    <div class="lobby-slots-grid" id="lobby-slots-container">
+                        <!-- Injected via JS -->
+                    </div>
+
+                    <!-- Controls -->
+                    <div class="lobby-controls-bar">
+                        <div id="lobby-host-controls" style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                            <label style="color: #ffd54f; font-weight: bold; font-size: 0.95rem;">대국 모드:</label>
+                            <label class="mode-radio-label"><input type="radio" name="lobby-mode" value="tonpuu" id="lobby-mode-tonpuu"> 동풍전</label>
+                            <label class="mode-radio-label"><input type="radio" name="lobby-mode" value="hanchan" id="lobby-mode-hanchan" checked> 반장전</label>
+                            <span style="color: rgba(255,255,255,0.2); margin: 0 4px;">|</span>
+                            <label style="color: #38bdf8; font-weight: bold; font-size: 0.95rem;">제한 시간:</label>
+                            <label class="mode-radio-label"><input type="radio" name="lobby-timer-mode" value="standard" id="lobby-timer-standard" checked> 5초+30초 장고</label>
+                            <label class="mode-radio-label"><input type="radio" name="lobby-timer-mode" value="unlimited" id="lobby-timer-unlimited"> 무제한</label>
+                            <button class="modal-btn btn-highlight" id="btn-lobby-start" disabled style="opacity: 0.5; padding: 10px 24px;">🀄 게임 시작</button>
+                        </div>
+                        <div id="lobby-guest-controls" style="display: none; gap: 14px; align-items: center; flex-wrap: wrap;">
+                            <div id="lobby-guest-settings-info" style="color: #cbd5e1; font-size: 0.9rem; font-weight: 600;">
+                                방 설정: <span id="lobby-guest-mode-text" style="color: #ffd54f;">반장전</span> · <span id="lobby-guest-timer-text" style="color: #38bdf8;">5초+30초 장고</span>
+                            </div>
+                            <button class="modal-btn btn-tutorial" id="btn-lobby-ready" style="padding: 10px 24px;">준비 완료 ⏳</button>
+                        </div>
+                        <button class="action-btn btn-pass" id="btn-lobby-leave" style="margin-left: auto; padding: 10px 20px;">🚪 나가기</button>
+                    </div>
+                    <div id="lobby-ready-hint" style="color: #94a3b8; font-size: 0.85rem; margin-top: 8px;">* 방 안의 모든 참가자가 준비를 완료하면 방장이 게임을 시작할 수 있습니다. (빈자리는 AI가 자동 참가)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tutorial In-Game HUD Overlay -->
+    <div class="tutorial-hud" id="tutorial-hud" style="display: none;">
+        <div class="tutorial-hud-header">
+            <span class="tutorial-hud-badge" id="tut-hud-stage-badge">제 1 장: 마작의 기본 규칙과 승리 형태</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button class="tutorial-hud-toggle-btn" id="btn-tut-toggle" title="설명창 접기/펼치기">접기 ▲</button>
+                <button class="tutorial-hud-exit-btn" id="btn-tut-exit">튜토리얼 종료 ✕</button>
+            </div>
+        </div>
+        <div class="tutorial-hud-body" id="tut-hud-body">
+            <!-- Guided message will be injected dynamically -->
+        </div>
+        <div class="tutorial-hud-footer">
+            <button class="tutorial-hud-btn" id="btn-tut-prev" style="display: none;">◀ 이전 설명</button>
+            <button class="tutorial-hud-btn btn-tut-next" id="btn-tut-next">다음 단계 ▶</button>
+        </div>
+    </div>
+
+    <!-- Chi Options Modal -->
+    <div class="chi-options-modal" id="modal-chi-picker">
+        <div style="font-weight: 700; color: #ffca28;">치할 조합을 선택하세요</div>
+        <div class="chi-options-container" id="chi-options-cards"></div>
+        <button class="action-btn btn-pass" style="display: block; margin-top: 8px;" id="btn-chi-cancel">취소</button>
+    </div>
+
+    <!-- Kan Options Modal -->
+    <div class="chi-options-modal" id="modal-kan-picker" style="display: none;">
+        <div style="font-weight: 800; color: #ffd54f; font-size: 1.15rem; margin-bottom: 6px;">선언할 깡을 선택하세요</div>
+        <div class="chi-options-container" id="kan-options-cards"></div>
+        <button class="action-btn btn-pass" style="display: block; margin-top: 10px;" id="btn-kan-cancel">취소</button>
+    </div>
+
+    <!-- Big Message Overlay (For Riichi, etc.) -->
+    <div class="big-message-overlay" id="big-message-overlay" style="display: none;">
+        <div class="big-message-text" id="big-message-text">리치!</div>
+    </div>
+
+    <!-- Yakuman Animation Overlay -->
+    <div class="yakuman-overlay" id="yakuman-anim-overlay" style="display: none;">
+        <div class="yakuman-text-wrapper">
+            <div class="yakuman-text">역만!</div>
+            <div class="yakuman-subtext" id="yakuman-anim-subtext">YAKUMAN</div>
+        </div>
+    </div>
+
+    <!-- In-Game Yaku Dictionary Modal (역 사전 모달) -->
+    <div class="modal-overlay" id="modal-yaku-dict" style="display: none; z-index: 10000;">
+        <div class="modal-content yaku-dict-content">
+            <!-- Modal Header -->
+            <div class="yaku-dict-header">
+                <div class="yaku-dict-title">
+                    <span style="font-size: 1.5rem;">📖</span>
+                    <span>리치 마작 역(족보) 사전</span>
+                    <span class="yaku-rule-badge">KML 표준 룰북</span>
+                </div>
+                <button class="yaku-dict-close-btn" id="btn-close-yaku-dict" title="사전 닫기 (ESC)">✕</button>
+            </div>
+
+            <!-- Toolbar: Filter Tabs & Search Box -->
+            <div class="yaku-dict-toolbar">
+                <div class="yaku-dict-tabs" id="yaku-dict-tabs">
+                    <button class="yaku-tab active" data-filter="all">전체 역 (<span id="count-all">0</span>)</button>
+                    <button class="yaku-tab tab-menzen" data-filter="menzen">🔒 멘젠 한정 역 (<span id="count-menzen">0</span>)</button>
+                    <button class="yaku-tab tab-furo" data-filter="furo">🔓 후로(울기) 가능 역 (<span id="count-furo">0</span>)</button>
+                    <button class="yaku-tab tab-yakuman" data-filter="yakuman">👑 역만 (<span id="count-yakuman">0</span>)</button>
+                </div>
+                <div class="yaku-dict-search-box">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="yaku-dict-search" placeholder="역 이름, 판수 검색 (예: 탕야오, 핑후, 2판...)" autocomplete="off">
+                </div>
+            </div>
+
+            <!-- Helpful Beginner Notice Banner -->
+            <div class="yaku-dict-notice">
+                <span class="notice-icon">💡</span>
+                <span><strong>초보자 필독</strong>: 마작에서 화료하려면 반드시 <strong>1판 이상의 '역'</strong>이 있어야 합니다. 울었을 때(치·퐁·깡) 사라지는 역(<strong>멘젠 한정</strong>)과 울어도 인정되는 역(<strong>후로 가능</strong>)을 꼭 구분하여 숙지하세요!</span>
+            </div>
+
+            <!-- Dynamic Yaku Cards Grid/List -->
+            <div class="yaku-dict-body" id="yaku-dict-cards-container">
+                <!-- Injected dynamically via JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <!-- three.js r186 + addons bundled as global THREE (see tools/three-bundle). Works over file:// too. -->
+    <script src="lib/three.min.js?v=49"></script>
+    <script src="js/MahjongTileRenderer.js?v=54"></script>
+    <script src="js/MahjongScoring.js?v=54"></script>
+    <script src="js/MahjongYakuCatalog.js?v=1"></script>
+    <script src="js/MahjongLogic.js?v=64"></script>
+    <script src="js/Mahjong3D.js?v=60"></script>
+    <script src="js/MahjongMultiplayer.js?v=2"></script>
+    <script src="js/main.js?v=71"></script>
+
+        <!-- Furo Toggle Button -->
+    
+    <button id="btn-furo-toggle" class="furo-toggle-btn on" style="position: absolute; bottom: 20px; left: 20px; z-index: 1000; padding: 10px 15px; font-size: 16px; font-weight: bold; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">울기 ON</button>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+

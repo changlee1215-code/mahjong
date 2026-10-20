@@ -1,0 +1,43 @@
+# Temporary & scratch scripts
+fix_*.py
+fix_*.js
+fix*.js
+patch_*.py
+patch*.py
+update_*.py
+modify*.py
+add_*.py
+add*.js
+try_catch_*.js
+restore*.js
+scratch*.js
+scratch*.html
+test_*.js
+test_*.html
+sim.js
+findBigMsg.js
+gen_base64.js
+get_error.js
+resize_table.py
+cache_bust.py
+startgame.bat
+
+# Debug & scratch folders
+scratch/
+debug/
+
+# Text logs & large documents
+*.txt
+*.pdf
+*.bak
+
+# Node & IDE
+node_modules/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Exceptions to keep
+!run_tests.js
+!run_tests.bat
