@@ -2345,5 +2345,229 @@ body, html {
     box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
 }
 
+/* ==========================================================================
+   Mobile & Touch Responsive Layout (@media max-width: 768px)
+   ========================================================================== */
+@media (max-width: 768px) {
+    /* Top Navigation Header */
+    .top-bar {
+        padding: 6px 10px;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .game-title {
+        font-size: 0.95rem;
+    }
+
+    .game-title .badge {
+        display: none; /* Hide subtitle badge to save precious horizontal space */
+    }
+
+    .round-info-box {
+        padding: 4px 10px;
+        gap: 8px;
+        border-radius: 12px;
+    }
+
+    .round-name {
+        font-size: 0.92rem;
+    }
+
+    .round-meta {
+        font-size: 0.75rem;
+        gap: 6px;
+    }
+
+    .dora-display {
+        gap: 4px;
+        font-size: 0.75rem;
+    }
+
+    .dora-preview-canvas {
+        width: 18px;
+        height: 27px;
+    }
+
+    .view-btn {
+        padding: 4px 8px;
+        font-size: 0.72rem;
+        border-radius: 6px;
+    }
+
+    .mode-info-tag {
+        font-size: 0.72rem;
+        padding: 4px 8px;
+    }
+
+    /* 4-way Player Badges: compact & avoid blocking hand tiles */
+    .player-tag {
+        padding: 4px 8px;
+        border-radius: 8px;
+        min-width: 72px;
+        font-size: 0.75rem;
+    }
+
+    .player-tag .p-name {
+        font-size: 0.75rem;
+    }
+
+    .player-tag .p-points {
+        font-size: 0.85rem;
+    }
+
+    .player-tag .wind-badge {
+        font-size: 0.7rem;
+        padding: 1px 4px;
+    }
+
+    .player-tag.p0 {
+        bottom: 85px;
+        left: 8px;
+        min-width: 76px;
+        z-index: 25;
+    }
+
+    .player-tag.p1 {
+        right: 8px;
+        top: 36%;
+        transform: translateY(-50%);
+        min-width: 74px;
+    }
+
+    .player-tag.p2 {
+        top: 48px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 3px 8px;
+        gap: 6px;
+        font-size: 0.72rem;
+    }
+
+    .player-tag.p3 {
+        left: 8px;
+        top: 36%;
+        transform: translateY(-50%);
+        min-width: 74px;
+    }
+
+    /* Action Buttons (쯔모, 론, 퐁, 치, 깡, 패스) */
+    .action-bar-container {
+        margin-bottom: 90px; /* Above bottom hand tiles, within easy thumb reach */
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 0 10px;
+    }
+
+    .action-btn {
+        font-size: 0.95rem;
+        padding: 10px 20px;
+        border-radius: 22px;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+        touch-action: manipulation;
+    }
+
+    /* Turn Timer HUD: reposition out of the way of right hand tiles */
+    .turn-timer-hud {
+        position: fixed;
+        bottom: auto;
+        top: 50px;
+        right: 8px;
+        min-width: 120px;
+        padding: 4px 10px;
+        border-radius: 8px;
+        z-index: 200;
+    }
+
+    .timer-seconds {
+        font-size: 1.3rem;
+    }
+
+    .timer-bank {
+        font-size: 1.15rem;
+    }
+
+    .timer-phase-badge {
+        font-size: 0.7rem;
+        padding: 2px 6px;
+    }
+
+    /* Furo toggle button */
+    .furo-toggle-btn {
+        bottom: 10px !important;
+        left: 10px !important;
+        padding: 7px 12px !important;
+        font-size: 13px !important;
+        border-radius: 6px !important;
+    }
+
+    /* Hover Waits HUD */
+    .riichi-waits-hud {
+        max-width: 92vw;
+        padding: 8px 12px;
+        font-size: 0.8rem;
+    }
+
+    /* Chi & Kan Picker Modals */
+    .chi-options-modal {
+        max-width: 95vw;
+        padding: 12px;
+    }
+
+    .chi-option-card {
+        padding: 6px;
+    }
+
+    .chi-tile-canvas {
+        width: 28px;
+        height: 40px;
+    }
+
+    /* Mode Select Content */
+    .mode-select-content {
+        padding: 16px 12px;
+        max-height: 95vh;
+        width: 96%;
+    }
+
+    .mode-cards-container {
+        gap: 12px;
+    }
+
+    .mode-card {
+        padding: 14px 14px;
+    }
+
+    .mode-card-title {
+        font-size: 1.15rem;
+    }
+
+    .mode-rules-list {
+        font-size: 0.78rem;
+        padding: 8px 10px;
+    }
+
+    /* Online Lobby View */
+    .online-box {
+        padding: 12px;
+    }
+
+    .room-code-banner {
+        font-size: 1.1rem;
+        padding: 8px 12px;
+    }
+
+    .room-code-highlight {
+        font-size: 1.5rem;
+        letter-spacing: 4px;
+    }
+
+    .lobby-controls-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+}
+
 
 

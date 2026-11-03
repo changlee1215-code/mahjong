@@ -662,10 +662,9 @@
             // Build Mahjong Table
             this.createTable();
 
-            // Events - Bind to window to never miss clicks
+            // Events - Bind to window and canvas with unified mobile touch and desktop interaction
             window.addEventListener('resize', () => this.onResize());
-            window.addEventListener('mousemove', (e) => this.onMouseMove(e));
-            window.addEventListener('click', (e) => this.onClick(e));
+            this.setupInteraction();
             this.setupCameraControls();
 
             // Animation Loop
@@ -796,9 +795,14 @@
             // Full Table Top-Down View:
             // Perfectly frames all 4 players' hands (배패), melds (후로패), discard rivers, and center console!
             const target = new THREE.Vector3(0, -0.5, -1.0);
-            const radius = 84;
+            let radius = 84;
+            const aspect = (this.container.clientWidth || window.innerWidth) / (this.container.clientHeight || window.innerHeight);
+            if (aspect < 1.0) {
+                // Scale camera distance on narrow mobile portrait screens so all 14 tiles remain visible
+                radius = 84 * (1.18 / Math.max(0.42, aspect));
+            }
             const theta = 0;
-            const phi = 0.48; // ~62.5° elevation angle: perfectly frames North hand, South hand, and all 4 players' melds
+            const phi = aspect < 1.0 ? 0.44 : 0.48;
             this._camMode = 0;
             if (smooth && this.camCtrl) {
                 this.animateCameraTo(target, radius, theta, phi);
@@ -3559,6 +3563,51 @@
             doFlash();
         }
 
+        // Setup unified pointer & touch interaction for desktop & mobile
+        setupInteraction() {
+            let touchStartX = 0, touchStartY = 0;
+            let touchStartTime = 0;
+
+            const isTouchTargetUI = (target) => {
+                return !!(target && target.closest && target.closest(
+                    'button, .action-btn, input, .modal-content, .top-bar, .yaku-dict-content, .player-tag, .turn-timer-hud, .tutorial-hud, .modal-overlay, .chi-options-modal'
+                ));
+            };
+
+            // Desktop Mouse Move (Hover interaction)
+            window.addEventListener('mousemove', (e) => {
+                if (isTouchTargetUI(e.target)) return;
+                this.onMouseMove(e);
+            });
+
+            // Mobile Touch Interaction
+            const el = this.renderer.domElement;
+            el.addEventListener('touchstart', (e) => {
+                if (e.touches && e.touches[0]) {
+                    touchStartX = e.touches[0].clientX;
+                    touchStartY = e.touches[0].clientY;
+                    touchStartTime = Date.now();
+                }
+            }, { passive: true });
+
+            el.addEventListener('touchend', (e) => {
+                if (!e.changedTouches || !e.changedTouches[0]) return;
+                const clientX = e.changedTouches[0].clientX;
+                const clientY = e.changedTouches[0].clientY;
+                if (Math.hypot(clientX - touchStartX, clientY - touchStartY) > 16) return;
+                this.handleTileTouch(clientX, clientY);
+            }, { passive: true });
+
+            // Desktop Mouse Click
+            window.addEventListener('click', (e) => {
+                if (isTouchTargetUI(e.target)) return;
+                if (Date.now() - touchStartTime < 450 && Math.hypot(e.clientX - touchStartX, e.clientY - touchStartY) < 16) {
+                    return; // Avoid double triggering on mobile devices
+                }
+                this.handleTileClick(e.clientX, e.clientY);
+            });
+        }
+
         // Mouse hover interaction: Lift hovered player tile
         onMouseMove(e) {
             if (this.isCameraDragging) return;
@@ -3568,14 +3617,11 @@
             this.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
-            // Temporarily lower the hovered tile to its original Y for accurate raycasting
             this.raycaster.setFromCamera(this.mouse, this.camera);
-
-            // Filter out markers from intersection
             const testMeshes = this.playerHandMeshes.filter(m => !m.userData.isMarker);
             const intersects = this.raycaster.intersectObjects(testMeshes);
 
-                        if (intersects.length > 0) {
+            if (intersects.length > 0) {
                 const target = intersects[0].object;
                 if (this.hoveredTile !== target) {
                     if (this.hoveredTile) {
@@ -3606,14 +3652,60 @@
             }
         }
 
-        // Mouse click interaction: direct raycasting on click coordinates
-        onClick(e) {
-            if (e && e.target && this.renderer && e.target !== this.renderer.domElement) return;
-            if (this.animations.length > 0) return;
+        // Mobile Touch Interaction: 2-step Tap (1st tap lifts & previews waits; 2nd tap discards)
+        handleTileTouch(clientX, clientY) {
+            if (this.animations && this.animations.length > 0) return;
 
             const rect = this.renderer.domElement.getBoundingClientRect();
-            const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            const mouseX = ((clientX - rect.left) / rect.width) * 2 - 1;
+            const mouseY = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), this.camera);
+            const testMeshes = this.playerHandMeshes.filter(m => !m.userData.isMarker);
+            const intersects = raycaster.intersectObjects(testMeshes);
+
+            if (intersects.length > 0) {
+                const target = intersects[0].object;
+                const handIdx = target.userData.handIndex;
+
+                if (this.hoveredTile === target) {
+                    // 2nd tap on the same lifted tile -> DISCARD!
+                    if (this.onTileClick) this.onTileClick(handIdx);
+                    this.hoveredTile.position.y = this.getTileDefaultY(this.hoveredTile);
+                    this.hoveredTile = null;
+                    this.highlightMatchingTiles(null);
+                    if (this.onTileHoverOut) this.onTileHoverOut();
+                } else {
+                    // 1st tap on tile -> Lift up, preview waits and highlight identical discards
+                    if (this.hoveredTile) {
+                        this.hoveredTile.position.y = this.getTileDefaultY(this.hoveredTile);
+                    }
+                    this.hoveredTile = target;
+                    this.hoveredTile.position.y = this.getTileDefaultY(target) + 0.6;
+                    this.highlightMatchingTiles(target.userData.tileCode);
+                    if (this.onTileHover) {
+                        this.onTileHover(handIdx, clientX, clientY);
+                    }
+                }
+            } else {
+                // Tapped empty space -> unhover
+                if (this.hoveredTile) {
+                    this.hoveredTile.position.y = this.getTileDefaultY(this.hoveredTile);
+                    this.hoveredTile = null;
+                    this.highlightMatchingTiles(null);
+                    if (this.onTileHoverOut) this.onTileHoverOut();
+                }
+            }
+        }
+
+        // Desktop Mouse Click: Direct raycast discard or fallback
+        handleTileClick(clientX, clientY) {
+            if (this.animations && this.animations.length > 0) return;
+
+            const rect = this.renderer.domElement.getBoundingClientRect();
+            const mouseX = ((clientX - rect.left) / rect.width) * 2 - 1;
+            const mouseY = -((clientY - rect.top) / rect.height) * 2 + 1;
 
             const clickRaycaster = new THREE.Raycaster();
             clickRaycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), this.camera);
@@ -3625,16 +3717,32 @@
                 const handIdx = target.userData.handIndex;
                 this.onTileClick(handIdx);
             } else if (this.hoveredTile && this.onTileClick) {
-                // Fallback to hovered tile
                 const handIdx = this.hoveredTile.userData.handIndex;
                 this.onTileClick(handIdx);
             }
         }
 
+        onClick(e) {
+            this.handleTileClick(e.clientX, e.clientY);
+        }
+
         onResize() {
             const width = this.container.clientWidth || window.innerWidth;
             const height = this.container.clientHeight || window.innerHeight;
-            this.camera.aspect = width / height;
+            const aspect = width / height;
+            this.camera.aspect = aspect;
+
+            if (this.camCtrl && (this._camMode === 0 || this._camMode === undefined)) {
+                if (aspect < 1.0) {
+                    this.camCtrl.radius = 84 * (1.18 / Math.max(0.42, aspect));
+                    this.camCtrl.phi = 0.44;
+                } else {
+                    this.camCtrl.radius = 84;
+                    this.camCtrl.phi = 0.48;
+                }
+                this.applyCamera();
+            }
+
             this.camera.updateProjectionMatrix();
             this.renderer.setSize(width, height);
         }

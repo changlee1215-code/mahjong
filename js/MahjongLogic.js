@@ -602,12 +602,26 @@
         }
 
         on(event, handler) {
-            this.callbacks[event] = handler;
+            if (!this.callbacks[event]) {
+                this.callbacks[event] = [];
+            } else if (typeof this.callbacks[event] === 'function') {
+                this.callbacks[event] = [this.callbacks[event]];
+            }
+            this.callbacks[event].push(handler);
         }
 
         emit(event, data) {
-            if (this.callbacks[event]) {
-                this.callbacks[event](data);
+            const cb = this.callbacks[event];
+            if (Array.isArray(cb)) {
+                for (const fn of cb) {
+                    try {
+                        fn(data);
+                    } catch (e) {
+                        console.error('[MahjongGame Event Error]', event, e);
+                    }
+                }
+            } else if (typeof cb === 'function') {
+                cb(data);
             }
         }
 

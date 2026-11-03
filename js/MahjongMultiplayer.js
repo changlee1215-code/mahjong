@@ -1052,10 +1052,13 @@
             'nagashiMangan', 'abortiveDraw', 'gameOver'
         ];
 
-        for (const ev of eventsToForward) {
-            game.on(ev, (payload) => {
-                this.broadcastGameEvent(ev, payload);
-            });
+        if (!game._mpBroadcastHooksAttached) {
+            game._mpBroadcastHooksAttached = true;
+            for (const ev of eventsToForward) {
+                game.on(ev, (payload) => {
+                    this.broadcastGameEvent(ev, payload);
+                });
+            }
         }
     };
 
@@ -1141,12 +1144,26 @@
         };
 
         proxy.on = function (event, handler) {
-            this.callbacks[event] = handler;
+            if (!this.callbacks[event]) {
+                this.callbacks[event] = [];
+            } else if (typeof this.callbacks[event] === 'function') {
+                this.callbacks[event] = [this.callbacks[event]];
+            }
+            this.callbacks[event].push(handler);
         };
 
         proxy.emit = function (event, data) {
-            if (this.callbacks[event]) {
-                this.callbacks[event](data);
+            const cb = this.callbacks[event];
+            if (Array.isArray(cb)) {
+                for (const fn of cb) {
+                    try {
+                        fn(data);
+                    } catch (e) {
+                        console.error('[ClientProxy Event Error]', event, e);
+                    }
+                }
+            } else if (typeof cb === 'function') {
+                cb(data);
             }
         };
 
@@ -1289,6 +1306,14 @@
             if (payload.achievers) {
                 for (const ach of payload.achievers) {
                     ach.playerId = toRel(ach.playerId, mySeat);
+                }
+            }
+            if (payload.reactionsByPlayer) {
+                for (const item of payload.reactionsByPlayer) {
+                    item.playerId = toRel(item.playerId, mySeat);
+                    if (item.discarderIdx != null) {
+                        item.discarderIdx = toRel(item.discarderIdx, mySeat);
+                    }
                 }
             }
 
