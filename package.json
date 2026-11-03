@@ -1,0 +1,13 @@
+{
+  "name": "riichi-mahjong-3d",
+  "version": "1.0.0",
+  "description": "3D Riichi Mahjong with WebSocket 4-digit Room Code Online Multiplayer",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js --open"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

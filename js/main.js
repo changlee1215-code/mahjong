@@ -2975,6 +2975,65 @@ game.on('tileDiscarded', (data) => {
         }
     }
 
+    const wsServerStatusBadge = document.getElementById('ws-server-status-badge');
+    const btnToggleWsConfig = document.getElementById('btn-toggle-ws-config');
+    const wsConfigPanel = document.getElementById('ws-config-panel');
+    const inputWsServerUrl = document.getElementById('input-ws-server-url');
+    const btnSaveWsUrl = document.getElementById('btn-save-ws-url');
+    const btnResetWsUrl = document.getElementById('btn-reset-ws-url');
+
+    function refreshWsServerStatus() {
+        if (!wsServerStatusBadge || typeof MahjongMultiplayer === 'undefined' || !MahjongMultiplayer.checkServerStatus) return;
+        wsServerStatusBadge.textContent = '⏳ 매칭 서버 확인 중...';
+        wsServerStatusBadge.style.color = '#cbd5e1';
+        wsServerStatusBadge.style.borderColor = 'rgba(148, 163, 184, 0.3)';
+        MahjongMultiplayer.checkServerStatus((res) => {
+            if (res.ok) {
+                wsServerStatusBadge.textContent = `🟢 WebSocket 서버 연결됨 (${res.latencyMs}ms)`;
+                wsServerStatusBadge.title = `연결 주소: ${res.url}`;
+                wsServerStatusBadge.style.color = '#4ade80';
+                wsServerStatusBadge.style.borderColor = 'rgba(74, 222, 128, 0.45)';
+            } else {
+                wsServerStatusBadge.textContent = '🔴 매칭 서버 연결 안 됨 (⚙️ 서버 설정 확인)';
+                wsServerStatusBadge.title = `대상 주소: ${res.url} (${res.error || ''})`;
+                wsServerStatusBadge.style.color = '#f87171';
+                wsServerStatusBadge.style.borderColor = 'rgba(248, 113, 113, 0.45)';
+            }
+        });
+    }
+
+    if (btnToggleWsConfig && wsConfigPanel) {
+        btnToggleWsConfig.onclick = () => {
+            const isHidden = wsConfigPanel.style.display === 'none';
+            wsConfigPanel.style.display = isHidden ? 'block' : 'none';
+            if (isHidden && inputWsServerUrl) {
+                inputWsServerUrl.value = MahjongMultiplayer.customWsUrl || '';
+            }
+        };
+    }
+
+    if (btnSaveWsUrl) {
+        btnSaveWsUrl.onclick = () => {
+            const val = inputWsServerUrl ? inputWsServerUrl.value.trim() : '';
+            MahjongMultiplayer.setCustomWsUrl(val);
+            refreshWsServerStatus();
+            if (onlineStatusMsg) {
+                onlineStatusMsg.textContent = `서버 주소가 설정되었습니다: ${MahjongMultiplayer.getWsUrl()}`;
+            }
+        };
+    }
+
+    if (btnResetWsUrl) {
+        btnResetWsUrl.onclick = () => {
+            if (inputWsServerUrl) inputWsServerUrl.value = '';
+            MahjongMultiplayer.setCustomWsUrl('');
+            refreshWsServerStatus();
+            if (onlineStatusMsg) {
+                onlineStatusMsg.textContent = `기본 매칭 서버 주소(${MahjongMultiplayer.getWsUrl()})로 초기화되었습니다.`;
+            }
+        };
+    }
+
     if (btnSelectOnline) {
         btnSelectOnline.onclick = () => {
             if (viewModeMain) viewModeMain.style.display = 'none';
@@ -2983,6 +3042,7 @@ game.on('tileDiscarded', (data) => {
             if (onlineEntryBox) onlineEntryBox.style.display = 'block';
             if (onlineRoomBox) onlineRoomBox.style.display = 'none';
             if (onlineStatusMsg) onlineStatusMsg.textContent = '';
+            refreshWsServerStatus();
         };
     }
 
@@ -3043,7 +3103,8 @@ game.on('tileDiscarded', (data) => {
                 if (lobbyRoomCodeDisplay) lobbyRoomCodeDisplay.textContent = joinedCode;
                 renderLobbySlots(MahjongMultiplayer.lobbySlots);
             }, (err) => {
-                if (onlineStatusMsg) onlineStatusMsg.textContent = '방 접속 실패. 코드를 다시 확인해주세요.';
+                const errMsg = (err && err.message) ? err.message : '방 접속 실패. 코드를 다시 확인해주세요.';
+                if (onlineStatusMsg) onlineStatusMsg.textContent = errMsg;
             });
         };
     }

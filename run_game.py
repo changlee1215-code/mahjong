@@ -3,6 +3,8 @@ import socketserver
 import webbrowser
 import os
 import sys
+import shutil
+import subprocess
 
 PORT = 8000
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -12,6 +14,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
 
 def start_server():
+    # Prefer Node.js server.js so WebSocket online matchmaking works out of the box
+    node_bin = shutil.which("node")
+    server_js = os.path.join(DIRECTORY, "server.js")
+    if node_bin and os.path.exists(server_js):
+        subprocess.run([node_bin, server_js, "--open"], cwd=DIRECTORY)
+        return
+
     global PORT
     while PORT < 8020:
         try:
@@ -24,8 +33,7 @@ def start_server():
                 print(f"==================================================")
                 webbrowser.open(url)
                 httpd.serve_forever()
-        except OSError as e:
-            # Address already in use, try next port
+        except OSError:
             PORT += 1
 
 if __name__ == '__main__':

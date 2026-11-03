@@ -1,19 +1,82 @@
 /**
  * MahjongMultiplayer.js
- * P2P WebRTC Multiplayer Manager for 3D Riichi Mahjong using PeerJS.
- * Supports 4-digit room code, slot-based lobby with AI fillers,
- * full-guest ready verification, and seat rotation adapter for client rendering.
+ * Online WebSocket Multiplayer Manager for 3D Riichi Mahjong.
+ * Supports 4-digit room code matching via WebSocket Relay Server,
+ * slot-based lobby with AI fillers, full-guest ready verification,
+ * and seat rotation adapter for client rendering.
  */
 
 (function (global) {
+    const WS_STORAGE_KEY = 'mahjong_ws_url';
+
+    class VirtualWsConnection {
+        constructor(peerId, sendFn, closeFn) {
+            this.peer = peerId;
+            this.open = false;
+            this._sendFn = sendFn;
+            this._closeFn = closeFn;
+            this._handlers = {};
+        }
+        on(event, fn) {
+            if (!this._handlers[event]) this._handlers[event] = [];
+            this._handlers[event].push(fn);
+        }
+        emit(event, data) {
+            const list = this._handlers[event];
+            if (list) {
+                for (const fn of list) {
+                    try {
+                        fn(data);
+                    } catch (e) {
+                        console.error('[VirtualWsConnection handler error]', e);
+                    }
+                }
+            }
+        }
+        send(data) {
+            if (!this.open) return;
+            if (this._sendFn) this._sendFn(data);
+        }
+        close() {
+            if (!this.open) return;
+            this.open = false;
+            if (this._closeFn) this._closeFn();
+        }
+    }
+
+    function normalizeWsUrl(rawUrl) {
+        if (!rawUrl || typeof rawUrl !== 'string') return '';
+        let url = rawUrl.trim();
+        if (!url) return '';
+        if (url.startsWith('https://')) {
+            url = 'wss://' + url.slice('https://'.length);
+        } else if (url.startsWith('http://')) {
+            url = 'ws://' + url.slice('http://'.length);
+        } else if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+            const isLocal = url.startsWith('localhost') || url.startsWith('127.0.0.1') || /^\d+\.\d+\.\d+\.\d+/.test(url);
+            url = (isLocal ? 'ws://' : 'wss://') + url;
+        }
+        try {
+            const parsed = new URL(url);
+            if (!parsed.pathname || parsed.pathname === '/') {
+                parsed.pathname = '/ws';
+            }
+            return parsed.toString();
+        } catch (e) {
+            return url;
+        }
+    }
+
     const MahjongMultiplayer = {
-        peer: null,
+        ws: null,
+        peer: null, // Maintained as { id: clientId, destroy() } for UI compatibility
+        customWsUrl: (typeof localStorage !== 'undefined' ? localStorage.getItem(WS_STORAGE_KEY) : '') || '',
         isHost: false,
         roomCode: null,
         mySeatIdx: 0,
         myNickname: '플레이어',
-        connections: {}, // peerId -> DataConnection
-        hostConn: null,  // For guest: DataConnection to host
+        connections: {}, // peerId -> VirtualWsConnection
+        hostConn: null,  // For guest: VirtualWsConnection to host
         lobbySlots: [
             { seatIdx: 0, type: 'human', peerId: 'HOST', name: '플레이어 (방장)', ready: true, isHost: true },
             { seatIdx: 1, type: 'ai',    peerId: null,   name: 'AI 하가', ready: true, isHost: false },
@@ -34,7 +97,117 @@
         onError: null
     };
 
-    const ROOM_PREFIX = 'kml-mahjong-room-';
+    MahjongMultiplayer.getWsUrl = function () {
+        if (typeof window !== 'undefined' && window.MAHJONG_WS_URL) {
+            return normalizeWsUrl(window.MAHJONG_WS_URL);
+        }
+        const saved = this.customWsUrl || (typeof localStorage !== 'undefined' ? localStorage.getItem(WS_STORAGE_KEY) : '');
+        if (saved && saved.trim()) {
+            return normalizeWsUrl(saved);
+        }
+        if (typeof window !== 'undefined' && window.location) {
+            const proto = window.location.protocol;
+            const host = window.location.host;
+            if ((proto === 'http:' || proto === 'https:') && host) {
+                const wsProto = proto === 'https:' ? 'wss:' : 'ws:';
+                return `${wsProto}//${host}/ws`;
+            }
+        }
+        return 'ws://localhost:8000/ws';
+    };
+
+    MahjongMultiplayer.setCustomWsUrl = function (rawUrl) {
+        const cleaned = (rawUrl || '').trim();
+        this.customWsUrl = cleaned ? normalizeWsUrl(cleaned) : '';
+        if (typeof localStorage !== 'undefined') {
+            if (this.customWsUrl) {
+                localStorage.setItem(WS_STORAGE_KEY, this.customWsUrl);
+            } else {
+                localStorage.removeItem(WS_STORAGE_KEY);
+            }
+        }
+        return this.getWsUrl();
+    };
+
+    MahjongMultiplayer.checkServerStatus = function (callback) {
+        const targetUrl = this.getWsUrl();
+        if (typeof WebSocket === 'undefined') {
+            if (callback) callback({ ok: false, url: targetUrl, error: 'WebSocket을 지원하지 않는 환경입니다.' });
+            return;
+        }
+        let settled = false;
+        const startTime = Date.now();
+        let probeWs = null;
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { if (probeWs) probeWs.close(); } catch (e) {}
+            if (callback) callback({ ok: false, url: targetUrl, error: '연결 시간 초과 (서버 응답 없음)' });
+        }, 3500);
+
+        try {
+            probeWs = new WebSocket(targetUrl);
+            probeWs.onopen = () => {
+                try {
+                    probeWs.send(JSON.stringify({ type: 'WS_PING', time: startTime }));
+                } catch (e) {}
+            };
+            probeWs.onmessage = (ev) => {
+                if (settled) return;
+                try {
+                    const data = JSON.parse(ev.data);
+                    if (data && data.type === 'WS_PONG') {
+                        settled = true;
+                        clearTimeout(timer);
+                        const latencyMs = Math.max(1, Date.now() - startTime);
+                        try { probeWs.close(); } catch (e) {}
+                        if (callback) callback({ ok: true, url: targetUrl, latencyMs });
+                    }
+                } catch (e) {}
+            };
+            probeWs.onerror = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                try { probeWs.close(); } catch (e) {}
+                if (callback) callback({ ok: false, url: targetUrl, error: 'WebSocket 서버에 연결할 수 없습니다.' });
+            };
+        } catch (err) {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                if (callback) callback({ ok: false, url: targetUrl, error: err.message });
+            }
+        }
+    };
+
+    MahjongMultiplayer.wsSend = function (obj) {
+        if (this.ws && this.ws.readyState === 1) { // WebSocket.OPEN === 1
+            try {
+                this.ws.send(JSON.stringify(obj));
+                return true;
+            } catch (err) {
+                console.warn('[Multiplayer WS Send Error]', err);
+            }
+        }
+        return false;
+    };
+
+    MahjongMultiplayer.closeWebSocket = function () {
+        if (this.ws) {
+            const oldWs = this.ws;
+            this.ws = null;
+            try {
+                oldWs.onopen = null;
+                oldWs.onmessage = null;
+                oldWs.onclose = null;
+                oldWs.onerror = null;
+                if (oldWs.readyState === 0 || oldWs.readyState === 1) {
+                    oldWs.close();
+                }
+            } catch (e) {}
+        }
+    };
 
     function generate4DigitCode() {
         return String(Math.floor(1000 + Math.random() * 9000));
@@ -116,15 +289,16 @@
     }
 
     // -------------------------------------------------------------------------
-    // HOST METHODS
+    // HOST METHODS (WebSocket 4-Digit Room Code)
     // -------------------------------------------------------------------------
     MahjongMultiplayer.createRoom = function (nickname, onReady) {
-        if (typeof Peer === 'undefined') {
-            alert('PeerJS 라이브러리가 로드되지 않았습니다.');
+        if (typeof WebSocket === 'undefined') {
+            alert('현재 브라우저에서 WebSocket을 지원하지 않습니다.');
             return;
         }
 
         this.isHost = true;
+        this._handlingHostDisconnect = false;
         this.myNickname = nickname || '방장';
         this.roomCode = generate4DigitCode();
         this.connections = {};
@@ -136,30 +310,95 @@
             { seatIdx: 3, type: 'ai',    peerId: null,   name: 'AI 상가', ready: true, isHost: false }
         ];
 
-        const peerId = ROOM_PREFIX + this.roomCode;
-        if (this.peer) this.peer.destroy();
-        this.peer = new Peer(peerId, { debug: 1 });
+        this.closeWebSocket();
+        const wsUrl = this.getWsUrl();
+        let roomReadyFired = false;
 
-        this.peer.on('open', (id) => {
-            console.log('[Multiplayer Host] Peer open with ID:', id, 'RoomCode:', this.roomCode);
-            this.startHeartbeat();
-            if (onReady) onReady(this.roomCode);
-            this.broadcastLobbyState();
-        });
+        try {
+            const ws = new WebSocket(wsUrl);
+            this.ws = ws;
 
-        this.peer.on('connection', (conn) => {
-            this.handleGuestConnection(conn);
-        });
+            const connectTimer = setTimeout(() => {
+                if (!roomReadyFired && this.ws === ws) {
+                    this.closeWebSocket();
+                    if (this.onError) {
+                        this.onError(new Error(`매칭 서버(${wsUrl}) 연결 시간 초과. 서버가 실행 중인지 확인해주세요.`));
+                    }
+                }
+            }, 6000);
 
-        this.peer.on('error', (err) => {
-            console.warn('[Multiplayer Host Error]', err);
-            if (err.type === 'unavailable-id') {
-                // Code collision, retry with new code
-                this.createRoom(nickname, onReady);
-            } else if (this.onError) {
-                this.onError(err);
-            }
-        });
+            ws.onopen = () => {
+                if (this.ws !== ws) return;
+                this.wsSend({
+                    type: 'WS_CREATE_ROOM',
+                    preferredCode: this.roomCode,
+                    nickname: this.myNickname
+                });
+            };
+
+            ws.onmessage = (ev) => {
+                if (this.ws !== ws) return;
+                let msg;
+                try {
+                    msg = JSON.parse(ev.data);
+                } catch (e) {
+                    return;
+                }
+                if (!msg || !msg.type) return;
+
+                if (msg.type === 'WS_ROOM_CREATED') {
+                    clearTimeout(connectTimer);
+                    roomReadyFired = true;
+                    this.roomCode = msg.roomCode;
+                    this.peer = {
+                        id: msg.clientId,
+                        destroy: () => this.closeWebSocket()
+                    };
+                    console.log('[Multiplayer Host] WebSocket room created:', this.roomCode, 'ClientId:', msg.clientId);
+                    this.startHeartbeat();
+                    if (onReady) onReady(this.roomCode);
+                    this.broadcastLobbyState();
+                } else if (msg.type === 'WS_GUEST_CONNECTED') {
+                    const guestId = msg.guestId;
+                    const conn = new VirtualWsConnection(
+                        guestId,
+                        (data) => this.wsSend({ type: 'WS_RELAY', to: guestId, data }),
+                        () => this.wsSend({ type: 'WS_KICK_GUEST', guestId })
+                    );
+                    this.handleGuestConnection(conn);
+                    conn.open = true;
+                    conn.emit('open');
+                } else if (msg.type === 'WS_RELAY') {
+                    const conn = this.connections[msg.from];
+                    if (conn && conn.open) {
+                        conn.emit('data', msg.data);
+                    }
+                } else if (msg.type === 'WS_GUEST_DISCONNECTED') {
+                    this.handleGuestDisconnect(msg.guestId, msg.reason || 'ws_disconnect');
+                } else if (msg.type === 'WS_ERROR') {
+                    clearTimeout(connectTimer);
+                    if (this.onError) {
+                        this.onError(new Error(msg.message || '서버 오류가 발생했습니다.'));
+                    }
+                }
+            };
+
+            ws.onerror = () => {
+                if (this.ws !== ws) return;
+                clearTimeout(connectTimer);
+                if (!roomReadyFired && this.onError) {
+                    this.onError(new Error(`매칭 서버(${wsUrl})에 연결할 수 없습니다.`));
+                }
+            };
+
+            ws.onclose = () => {
+                if (this.ws !== ws) return;
+                clearTimeout(connectTimer);
+                console.warn('[Multiplayer Host] WebSocket connection closed.');
+            };
+        } catch (err) {
+            if (this.onError) this.onError(err);
+        }
     };
 
     MahjongMultiplayer.startHeartbeat = function () {
@@ -525,11 +764,11 @@
     };
 
     // -------------------------------------------------------------------------
-    // GUEST METHODS
+    // GUEST METHODS (WebSocket 4-Digit Room Code)
     // -------------------------------------------------------------------------
     MahjongMultiplayer.joinRoom = function (roomCode, nickname, onJoined, onError) {
-        if (typeof Peer === 'undefined') {
-            alert('PeerJS 라이브러리가 로드되지 않았습니다.');
+        if (typeof WebSocket === 'undefined') {
+            alert('현재 브라우저에서 WebSocket을 지원하지 않습니다.');
             return;
         }
 
@@ -538,47 +777,98 @@
         this.roomCode = String(roomCode).trim();
         this.myNickname = nickname || '참가자';
 
-        if (this.peer) {
-            try { this.peer.destroy(); } catch (e) {}
-        }
-        this.peer = new Peer(null, { debug: 1 });
+        this.closeWebSocket();
+        const wsUrl = this.getWsUrl();
+        let joinedSuccess = false;
 
-        this.peer.on('open', (id) => {
-            console.log('[Multiplayer Guest] My Peer ID:', id);
-            const hostPeerId = ROOM_PREFIX + this.roomCode;
-            const conn = this.peer.connect(hostPeerId, { reliable: true });
-            this.hostConn = conn;
+        try {
+            const ws = new WebSocket(wsUrl);
+            this.ws = ws;
 
-            conn.on('open', () => {
-                console.log('[Multiplayer Guest] Connected to host!');
-                this.lastHostPongTime = Date.now();
-                this.startHeartbeat();
-                this.attachConnectionStateListeners(conn, (why) => {
-                    this.handleHostDisconnect(why);
+            const connectTimer = setTimeout(() => {
+                if (!joinedSuccess && this.ws === ws) {
+                    this.closeWebSocket();
+                    const err = new Error(`매칭 서버(${wsUrl}) 연결 시간 초과.`);
+                    if (onError) onError(err);
+                }
+            }, 6000);
+
+            ws.onopen = () => {
+                if (this.ws !== ws) return;
+                this.wsSend({
+                    type: 'WS_JOIN_ROOM',
+                    roomCode: this.roomCode,
+                    nickname: this.myNickname
                 });
-                conn.send({ type: 'SET_NICKNAME', name: this.myNickname });
-                if (onJoined) onJoined(this.roomCode);
-            });
+            };
 
-            conn.on('data', (data) => {
-                this.handleHostMessage(data);
-            });
+            ws.onmessage = (ev) => {
+                if (this.ws !== ws) return;
+                let msg;
+                try {
+                    msg = JSON.parse(ev.data);
+                } catch (e) {
+                    return;
+                }
+                if (!msg || !msg.type) return;
 
-            conn.on('close', () => {
-                this.handleHostDisconnect('conn_close');
-            });
+                if (msg.type === 'WS_ROOM_JOINED') {
+                    clearTimeout(connectTimer);
+                    joinedSuccess = true;
+                    this.roomCode = msg.roomCode;
+                    this.peer = {
+                        id: msg.clientId,
+                        destroy: () => this.closeWebSocket()
+                    };
+                    const conn = new VirtualWsConnection(
+                        'HOST',
+                        (data) => this.wsSend({ type: 'WS_RELAY', to: 'HOST', data }),
+                        () => this.wsSend({ type: 'WS_LEAVE_ROOM', reason: 'guest_close' })
+                    );
+                    conn.open = true;
+                    this.hostConn = conn;
+                    this.lastHostPongTime = Date.now();
+                    this.startHeartbeat();
+                    conn.send({ type: 'SET_NICKNAME', name: this.myNickname });
+                    if (onJoined) onJoined(this.roomCode);
+                } else if (msg.type === 'WS_RELAY') {
+                    this.handleHostMessage(msg.data);
+                } else if (msg.type === 'WS_HOST_DISCONNECTED') {
+                    this.handleHostDisconnect(msg.reason || 'ws_host_disconnect');
+                } else if (msg.type === 'WS_KICKED') {
+                    this.handleHostMessage({ type: 'KICKED' });
+                } else if (msg.type === 'WS_ROOM_FULL') {
+                    clearTimeout(connectTimer);
+                    this.handleHostMessage({ type: 'ROOM_FULL' });
+                    this.closeWebSocket();
+                    if (onError) onError(new Error('방이 꽉 찼습니다 (최대 4인).'));
+                } else if (msg.type === 'WS_ERROR') {
+                    clearTimeout(connectTimer);
+                    this.closeWebSocket();
+                    if (onError) onError(new Error(msg.message || '방 접속 실패. 코드를 다시 확인해주세요.'));
+                }
+            };
 
-            conn.on('error', (err) => {
-                console.warn('[Multiplayer Guest Conn Error]', err);
-                this.handleHostDisconnect('conn_error');
-                if (onError) onError(err);
-            });
-        });
+            ws.onerror = () => {
+                if (this.ws !== ws) return;
+                clearTimeout(connectTimer);
+                if (!joinedSuccess) {
+                    if (onError) onError(new Error(`매칭 서버(${wsUrl}) 연결 실패.`));
+                } else {
+                    this.handleHostDisconnect('ws_error');
+                }
+            };
 
-        this.peer.on('error', (err) => {
-            console.warn('[Multiplayer Guest Peer Error]', err);
+            ws.onclose = () => {
+                if (this.ws !== ws) return;
+                clearTimeout(connectTimer);
+                if (joinedSuccess) {
+                    this.handleHostDisconnect('ws_close');
+                }
+            };
+        } catch (err) {
             if (onError) onError(err);
-        });
+        }
     };
 
     MahjongMultiplayer.handleHostMessage = function (msg) {
@@ -1128,6 +1418,7 @@
                     } catch (e) {}
                 }
             }
+            this.wsSend({ type: 'WS_LEAVE_ROOM', reason: 'window_unload' });
         } else if (this.hostConn && this.hostConn.open) {
             try {
                 this.hostConn.send({
@@ -1138,7 +1429,9 @@
                 });
                 this.hostConn.close();
             } catch (e) {}
+            this.wsSend({ type: 'WS_LEAVE_ROOM', reason: 'window_unload' });
         }
+        this.closeWebSocket();
     };
 
     MahjongMultiplayer.leaveRoom = function () {
@@ -1152,6 +1445,7 @@
                     } catch (e) {}
                 }
             }
+            this.wsSend({ type: 'WS_LEAVE_ROOM', reason: 'user_leave' });
         } else if (this.hostConn && this.hostConn.open) {
             try {
                 this.hostConn.send({
@@ -1162,9 +1456,11 @@
                 });
                 this.hostConn.close();
             } catch (e) {}
+            this.wsSend({ type: 'WS_LEAVE_ROOM', reason: 'user_leave' });
         }
 
         this.stopHeartbeat();
+        this.closeWebSocket();
         if (this.peer) {
             try { this.peer.destroy(); } catch (e) {}
             this.peer = null;
