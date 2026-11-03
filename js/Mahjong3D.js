@@ -3608,6 +3608,7 @@
 
         // Mouse click interaction: direct raycasting on click coordinates
         onClick(e) {
+            if (e && e.target && this.renderer && e.target !== this.renderer.domElement) return;
             if (this.animations.length > 0) return;
 
             const rect = this.renderer.domElement.getBoundingClientRect();

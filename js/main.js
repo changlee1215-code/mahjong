@@ -3,7 +3,9 @@
  * Mahjong Game Controller & UI Integration.
  */
 
-window.addEventListener('DOMContentLoaded', () => {
+function initMahjongApp() {
+    if (window.__mahjongInitStarted) return;
+    window.__mahjongInitStarted = true;
     const container = document.getElementById('canvas-container');
 
     let game = null;
@@ -267,14 +269,33 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Initialize 3D Scene
-    sceneManager = new Mahjong3D.SceneManager(container, (handIndex) => {
-        onPlayerTileClicked(handIndex);
-    }, (handIndex) => {
-        onPlayerTileHovered(handIndex);
-    }, () => {
-        onPlayerTileHoverOut();
-    });
+    // Initialize 3D Scene (with fallback stub if mobile WebGL fails)
+    try {
+        sceneManager = new Mahjong3D.SceneManager(container, (handIndex) => {
+            onPlayerTileClicked(handIndex);
+        }, (handIndex) => {
+            onPlayerTileHovered(handIndex);
+        }, () => {
+            onPlayerTileHoverOut();
+        });
+    } catch (err) {
+        console.warn('3D WebGL initialization warning:', err);
+        sceneManager = {
+            renderGameState: () => {},
+            setTableView: () => {},
+            setPlayerView: () => {},
+            setHandFocusView: () => {},
+            clearRiichiSelectionMode: () => {},
+            setRiichiSelectionMode: () => {},
+            clearTutorialTargetTile: () => {},
+            setTutorialTargetTile: () => {},
+            clearDiscardHighlight: () => {},
+            highlightMatchingTiles: () => {},
+            animateDiscard: (_p, _t, _f, _r, cb) => { if (cb) cb(); },
+            animateFuro: (_p, _m, cb) => { if (cb) cb(); },
+            playWinCameraZoom: (_p, _t, cb) => { if (cb) cb(); }
+        };
+    }
     window.sceneManager = sceneManager;
 
     // Initialize Game Logic
@@ -3298,4 +3319,24 @@ game.on('tileDiscarded', (data) => {
     window.showBigMessage = showBigMessage;
     window.getPlayerDisplayName = getPlayerDisplayName;
 
-});
+    window.__mahjongAppReady = true;
+    ['btn-select-tonpuu', 'btn-select-hanchan', 'btn-select-tutorial', 'btn-select-online'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el && el.dataset.origText) {
+            el.textContent = el.dataset.origText;
+        }
+    });
+    if (window.__earlyClickedBtnId) {
+        const pendingEl = document.getElementById(window.__earlyClickedBtnId);
+        window.__earlyClickedBtnId = null;
+        if (pendingEl && typeof pendingEl.onclick === 'function') {
+            pendingEl.onclick();
+        }
+    }
+}
+
+if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', initMahjongApp);
+} else {
+    initMahjongApp();
+}

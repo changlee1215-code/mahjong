@@ -800,6 +800,7 @@ body, html {
     width: 95%;
     max-height: 92vh;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     padding: 28px 24px;
     transition: max-width 0.3s ease;
 }
@@ -930,6 +931,8 @@ body, html {
     font-weight: 800;
     border-radius: 10px;
     cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .mode-select-btn.btn-highlight {

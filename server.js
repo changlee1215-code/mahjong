@@ -8,8 +8,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const os = require('os');
 const { exec } = require('child_process');
+
+// In-memory compression cache: filePath -> { mtimeMs, raw, gzip, br }
+const staticCache = new Map();
+const COMPRESSIBLE_EXTS = new Set(['.html', '.js', '.css', '.json', '.svg']);
 
 const DEFAULT_PORT = parseInt(process.env.PORT || '8000', 10);
 const ROOT_DIR = __dirname;
@@ -434,8 +439,51 @@ const server = http.createServer((req, res) => {
         const ext = path.extname(safePath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
         const headers = { 'Content-Type': contentType };
-        if (ext === '.html' || ext === '.js' || ext === '.css') {
+
+        if (pathname.startsWith('/lib/')) {
+            headers['Cache-Control'] = 'public, max-age=86400';
+        } else if (ext === '.html' || ext === '.js' || ext === '.css') {
             headers['Cache-Control'] = 'no-cache';
+        }
+
+        if (COMPRESSIBLE_EXTS.has(ext) && stats.size < 5 * 1024 * 1024) {
+            let cached = staticCache.get(safePath);
+            if (!cached || cached.mtimeMs !== stats.mtimeMs) {
+                try {
+                    const raw = fs.readFileSync(safePath);
+                    const gzip = zlib.gzipSync(raw, { level: 6 });
+                    const br = zlib.brotliCompressSync(raw, {
+                        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 }
+                    });
+                    cached = { mtimeMs: stats.mtimeMs, raw, gzip, br };
+                    staticCache.set(safePath, cached);
+                } catch (e) {
+                    cached = null;
+                }
+            }
+
+            if (cached) {
+                const acceptEnc = req.headers['accept-encoding'] || '';
+                headers['Vary'] = 'Accept-Encoding';
+                if (acceptEnc.includes('br')) {
+                    headers['Content-Encoding'] = 'br';
+                    headers['Content-Length'] = cached.br.length;
+                    res.writeHead(200, headers);
+                    res.end(cached.br);
+                    return;
+                } else if (acceptEnc.includes('gzip')) {
+                    headers['Content-Encoding'] = 'gzip';
+                    headers['Content-Length'] = cached.gzip.length;
+                    res.writeHead(200, headers);
+                    res.end(cached.gzip);
+                    return;
+                } else {
+                    headers['Content-Length'] = cached.raw.length;
+                    res.writeHead(200, headers);
+                    res.end(cached.raw);
+                    return;
+                }
+            }
         }
 
         res.writeHead(200, headers);

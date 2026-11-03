@@ -23,7 +23,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3D 리치 마작 (Riichi Mahjong 3D)</title>
-    <link rel="stylesheet" href="css/style.css?v=57">
+    <link rel="stylesheet" href="css/style.css?v=58">
 </head>
 <body>
     <!-- 3D Three.js Container -->
@@ -303,6 +303,23 @@
                         <button class="modal-btn mode-select-btn" id="btn-select-online" style="background: linear-gradient(135deg, #059669, #10b981); color: #fff;">온라인 로비 입장 🌐</button>
                     </div>
                 </div>
+                <script>
+                (function () {
+                    window.__earlyClickedBtnId = null;
+                    ['btn-select-tonpuu', 'btn-select-hanchan', 'btn-select-tutorial', 'btn-select-online'].forEach(function (id) {
+                        var el = document.getElementById(id);
+                        if (el) {
+                            el.addEventListener('click', function () {
+                                if (!window.__mahjongAppReady) {
+                                    window.__earlyClickedBtnId = id;
+                                    if (!el.dataset.origText) el.dataset.origText = el.textContent;
+                                    el.textContent = '⏳ 로딩 중... 잠시만 기다려주세요';
+                                }
+                            });
+                        }
+                    });
+                })();
+                </script>
             </div>
 
             <!-- 2. Tutorial Stages View (단계 선택 화면) -->
@@ -616,9 +633,9 @@
     <script src="js/MahjongScoring.js?v=54"></script>
     <script src="js/MahjongYakuCatalog.js?v=1"></script>
     <script src="js/MahjongLogic.js?v=64"></script>
-    <script src="js/Mahjong3D.js?v=60"></script>
-    <script src="js/MahjongMultiplayer.js?v=3"></script>
-    <script src="js/main.js?v=72"></script>
+    <script src="js/Mahjong3D.js?v=61"></script>
+    <script src="js/MahjongMultiplayer.js?v=4"></script>
+    <script src="js/main.js?v=73"></script>
 
         <!-- Furo Toggle Button -->
     
